@@ -153,7 +153,7 @@ bool Treepub::parseSourceFile() {
     return false;
   }
 
-  const size_t docCapacity = std::clamp<size_t>(fileSize + 8192, 24 * 1024, 96 * 1024);
+  const size_t docCapacity = std::clamp<size_t>((fileSize / 2) + 4096, 8 * 1024, 48 * 1024);
   DynamicJsonDocument doc(docCapacity);
   const auto err = deserializeJson(doc, file);
   if (err) {

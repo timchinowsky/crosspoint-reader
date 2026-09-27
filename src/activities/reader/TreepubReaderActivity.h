@@ -28,6 +28,8 @@ class TreepubReaderActivity final : public ReaderActivity {
   std::string lastHint;
   unsigned long lastHintAt = 0;
   static constexpr unsigned long HINT_DURATION_MS = 1500;
+  static constexpr size_t HISTORY_MAX = 64;
+  static constexpr size_t BOOKMARK_MAX = 128;
 
   void updateLayoutMetrics();
   void buildNodeLayout();

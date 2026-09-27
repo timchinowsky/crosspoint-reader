@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
@@ -37,6 +38,9 @@ bool TreepubReaderActivity::loadBook() {
   }
   treepub = std::shared_ptr<Treepub>(std::move(loadedTreepub));
   treepub->setupCacheDir();
+  history.reserve(HISTORY_MAX);
+  bookmarks.reserve(BOOKMARK_MAX);
+  wrappedLines.reserve(64);
   currentNodeId = treepub->getRootId();
   loadProgress();
   loadBookmarks();
@@ -69,38 +73,12 @@ void TreepubReaderActivity::buildNodeLayout() {
     return;
   }
 
-  std::string content = node->text;
-  if (content.empty()) content = node->title;
-  size_t start = 0;
+  const std::string& contentRef = node->text.empty() ? node->title : node->text;
   const int fontId = SETTINGS.getReaderFontId();
-  while (start <= content.size()) {
-    size_t end = content.find('\n', start);
-    std::string line = end == std::string::npos ? content.substr(start) : content.substr(start, end - start);
-    if (line.empty()) {
-      wrappedLines.emplace_back();
-    } else {
-      while (!line.empty()) {
-        size_t breakPos = line.size();
-        while (breakPos > 0 && renderer.getTextAdvanceX(fontId, line.substr(0, breakPos).c_str(),
-                                                        EpdFontFamily::REGULAR) > viewportWidth) {
-          size_t spacePos = line.rfind(' ', breakPos - 1);
-          if (spacePos != std::string::npos && spacePos > 0) {
-            breakPos = spacePos;
-          } else {
-            breakPos--;
-            while (breakPos > 0 && (line[breakPos] & 0xC0) == 0x80) breakPos--;
-          }
-        }
-        if (breakPos == 0) breakPos = 1;
-        wrappedLines.push_back(line.substr(0, breakPos));
-        size_t skip = breakPos;
-        if (skip < line.size() && line[skip] == ' ') skip++;
-        line = line.substr(skip);
-      }
-    }
-    if (end == std::string::npos) break;
-    start = end + 1;
-  }
+  const size_t expectedLines = std::max<size_t>(16, contentRef.size() / 48);
+  wrappedLines.reserve(std::min<size_t>(expectedLines, 1024));
+  auto lines = renderer.wrappedText(fontId, contentRef.c_str(), viewportWidth, 4096, EpdFontFamily::REGULAR);
+  wrappedLines.insert(wrappedLines.end(), std::make_move_iterator(lines.begin()), std::make_move_iterator(lines.end()));
   if (wrappedLines.empty()) wrappedLines.push_back("");
   totalPages = std::max(1, static_cast<int>((wrappedLines.size() + linesPerPage - 1) / linesPerPage));
   if (currentPage >= totalPages) currentPage = totalPages - 1;
@@ -219,7 +197,10 @@ void TreepubReaderActivity::renderNode() {
 bool TreepubReaderActivity::navigateToNode(const uint32_t nodeId, const bool pushHistory, const char* hintText) {
   if (!treepub || !treepub->getNode(nodeId)) return false;
   if (nodeId == currentNodeId) return true;
-  if (pushHistory) history.push_back(currentNodeId);
+  if (pushHistory) {
+    if (history.size() >= HISTORY_MAX) history.erase(history.begin());
+    history.push_back(currentNodeId);
+  }
   currentNodeId = nodeId;
   currentPage = 0;
   buildNodeLayout();
@@ -302,7 +283,7 @@ bool TreepubReaderActivity::handleFormatInput() {
 
 void TreepubReaderActivity::saveProgress() const {
   if (!treepub) return;
-  const uint16_t historyCount = static_cast<uint16_t>(std::min<size_t>(history.size(), 2));
+  const uint16_t historyCount = static_cast<uint16_t>(std::min<size_t>(history.size(), HISTORY_MAX));
   const size_t payloadBytes = sizeof(TREEPUB_PROGRESS_MAGIC) + sizeof(TREEPUB_PROGRESS_VERSION) +
                               sizeof(currentNodeId) + sizeof(uint16_t) + sizeof(historyCount) +
                               static_cast<size_t>(historyCount) * sizeof(uint32_t);
@@ -349,7 +330,8 @@ void TreepubReaderActivity::loadProgress() {
     currentPage = page;
   }
   history.clear();
-  historyCount = std::min<uint16_t>(historyCount, 2);
+  history.reserve(HISTORY_MAX);
+  historyCount = std::min<uint16_t>(historyCount, static_cast<uint16_t>(HISTORY_MAX));
   for (uint16_t i = 0; i < historyCount; i++) {
     uint32_t h = 0;
     if (file.read(reinterpret_cast<uint8_t*>(&h), sizeof(h)) != sizeof(h)) break;
@@ -400,6 +382,7 @@ void TreepubReaderActivity::loadBookmarks() {
   if (file.read(&version, sizeof(version)) != sizeof(version)) return;
   if (magic != TREEPUB_BOOKMARK_MAGIC || version != TREEPUB_BOOKMARK_VERSION) return;
   if (file.read(reinterpret_cast<uint8_t*>(&count), sizeof(count)) != sizeof(count)) return;
+  count = std::min<uint16_t>(count, static_cast<uint16_t>(BOOKMARK_MAX));
   bookmarks.resize(count);
   if (count > 0) {
     const size_t bytes = sizeof(uint32_t) * count;

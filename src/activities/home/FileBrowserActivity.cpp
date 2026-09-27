@@ -32,6 +32,8 @@ std::string getBookCachePath(const std::string& path) {
   const char* prefix = nullptr;
   if (FsHelpers::hasEpubExtension(path)) {
     prefix = "epub_";
+  } else if (FsHelpers::hasTreepubExtension(path)) {
+    prefix = "treepub_";
   } else if (FsHelpers::hasXtcExtension(path)) {
     prefix = "xtc_";
   } else if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
@@ -132,7 +134,8 @@ void FileBrowserActivity::loadFiles() {
         if (FsHelpers::checkFileExtension(filename, ".bin")) {
           files.emplace_back(filename);
         }
-      } else if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
+      } else if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasTreepubExtension(filename) ||
+                 FsHelpers::hasXtcExtension(filename) ||
                  FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
                  FsHelpers::hasBmpExtension(filename) || FsHelpers::hasPngExtension(filename)) {
         files.emplace_back(filename);

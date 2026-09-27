@@ -37,8 +37,9 @@ constexpr const char* HIDDEN_ITEMS[] = {"System Volume Information", "XTCache"};
 // Formats the library index tracks (LibraryIndex isBookName): an upload of any
 // of these must mark the index dirty so the next Library entry rebuilds it.
 bool isLibraryBookFile(const String& filename) {
-  return FsHelpers::checkFileExtension(filename, ".epub") || FsHelpers::checkFileExtension(filename, ".txt") ||
-         FsHelpers::checkFileExtension(filename, ".md") || FsHelpers::checkFileExtension(filename, ".xtc");
+  return FsHelpers::checkFileExtension(filename, ".epub") || FsHelpers::checkFileExtension(filename, ".treepub") ||
+         FsHelpers::checkFileExtension(filename, ".txt") || FsHelpers::checkFileExtension(filename, ".md") ||
+         FsHelpers::checkFileExtension(filename, ".xtc");
 }
 constexpr uint16_t UDP_PORTS[] = {54982, 48123, 39001, 44044, 59678};
 constexpr uint16_t LOCAL_UDP_PORT = 8134;

@@ -1,0 +1,466 @@
+#include "TreepubReaderActivity.h"
+
+#include <Bitmap.h>
+#include <FsHelpers.h>
+#include <GfxRenderer.h>
+#include <HalStorage.h>
+#include <I18n.h>
+#include <Memory.h>
+
+#include <algorithm>
+#include <cstring>
+
+#include "CrossPointSettings.h"
+#include "MappedInputManager.h"
+#include "ProgressFile.h"
+#include "ReaderUtils.h"
+#include "TreepubNavigatorActivity.h"
+#include "components/UITheme.h"
+#include "fontIds.h"
+
+namespace {
+constexpr uint32_t TREEPUB_PROGRESS_MAGIC = 0x50525454;  // "TTRP"
+constexpr uint8_t TREEPUB_PROGRESS_VERSION = 1;
+constexpr uint32_t TREEPUB_BOOKMARK_MAGIC = 0x4B525454;  // "TTRK"
+constexpr uint8_t TREEPUB_BOOKMARK_VERSION = 1;
+}  // namespace
+
+bool TreepubReaderActivity::loadBook() {
+  auto loadedTreepub = makeUniqueNoThrow<Treepub>(bookPath, "/.crosspoint");
+  if (!loadedTreepub) {
+    LOG_ERR("TRR", "Failed to allocate Treepub object");
+    return false;
+  }
+  if (!loadedTreepub->load()) {
+    LOG_ERR("TRR", "Failed to load treepub");
+    return false;
+  }
+  treepub = std::shared_ptr<Treepub>(std::move(loadedTreepub));
+  treepub->setupCacheDir();
+  currentNodeId = treepub->getRootId();
+  loadProgress();
+  loadBookmarks();
+  return treepub->getNode(currentNodeId) != nullptr;
+}
+
+void TreepubReaderActivity::updateLayoutMetrics() {
+  renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom, &orientedMarginLeft);
+  orientedMarginTop += SETTINGS.screenMargin;
+  orientedMarginLeft += SETTINGS.screenMargin;
+  orientedMarginRight += SETTINGS.screenMargin;
+  orientedMarginBottom += std::max(SETTINGS.screenMargin, static_cast<uint8_t>(UITheme::getInstance().getStatusBarHeight()));
+  viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
+  const int viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
+  linesPerPage = std::max(1, viewportHeight / renderer.getLineHeight(SETTINGS.getReaderFontId()));
+}
+
+void TreepubReaderActivity::buildNodeLayout() {
+  wrappedLines.clear();
+  totalPages = 1;
+  currentPage = std::max(0, currentPage);
+  updateLayoutMetrics();
+  const Treepub::Node* node = treepub ? treepub->getNode(currentNodeId) : nullptr;
+  if (!node) return;
+  nodeIsImage = !node->imagePath.empty() && FsHelpers::hasBmpExtension(node->imagePath);
+  if (nodeIsImage) {
+    totalPages = 1;
+    return;
+  }
+
+  std::string content = node->text;
+  if (content.empty()) content = node->title;
+  size_t start = 0;
+  const int fontId = SETTINGS.getReaderFontId();
+  while (start <= content.size()) {
+    size_t end = content.find('\n', start);
+    std::string line = end == std::string::npos ? content.substr(start) : content.substr(start, end - start);
+    if (line.empty()) {
+      wrappedLines.emplace_back();
+    } else {
+      while (!line.empty()) {
+        size_t breakPos = line.size();
+        while (breakPos > 0 &&
+               renderer.getTextAdvanceX(fontId, line.substr(0, breakPos).c_str(), EpdFontFamily::REGULAR) > viewportWidth) {
+          size_t spacePos = line.rfind(' ', breakPos - 1);
+          if (spacePos != std::string::npos && spacePos > 0) {
+            breakPos = spacePos;
+          } else {
+            breakPos--;
+            while (breakPos > 0 && (line[breakPos] & 0xC0) == 0x80) breakPos--;
+          }
+        }
+        if (breakPos == 0) breakPos = 1;
+        wrappedLines.push_back(line.substr(0, breakPos));
+        size_t skip = breakPos;
+        if (skip < line.size() && line[skip] == ' ') skip++;
+        line = line.substr(skip);
+      }
+    }
+    if (end == std::string::npos) break;
+    start = end + 1;
+  }
+  if (wrappedLines.empty()) wrappedLines.push_back("");
+  totalPages = std::max(1, static_cast<int>((wrappedLines.size() + linesPerPage - 1) / linesPerPage));
+  if (currentPage >= totalPages) currentPage = totalPages - 1;
+}
+
+std::string TreepubReaderActivity::breadcrumb() const {
+  if (!treepub) return "";
+  std::vector<uint32_t> ids = treepub->getPathToRoot(currentNodeId);
+  std::string out;
+  for (size_t i = 0; i < ids.size(); i++) {
+    const Treepub::Node* node = treepub->getNode(ids[i]);
+    if (!node) continue;
+    if (!out.empty()) out += " > ";
+    out += node->title;
+  }
+  constexpr size_t MAX_BREADCRUMB = 52;
+  if (out.size() > MAX_BREADCRUMB) {
+    out = "..." + out.substr(out.size() - (MAX_BREADCRUMB - 3));
+  }
+  return out;
+}
+
+int TreepubReaderActivity::indexInSiblings(const Treepub::Node& node, int* totalSiblings) const {
+  if (!treepub) {
+    *totalSiblings = 1;
+    return 1;
+  }
+  const auto parentId = treepub->getParent(node.id);
+  if (!parentId.has_value()) {
+    *totalSiblings = 1;
+    return 1;
+  }
+  const Treepub::Node* parent = treepub->getNode(parentId.value());
+  if (!parent || parent->children.empty()) {
+    *totalSiblings = 1;
+    return 1;
+  }
+  *totalSiblings = static_cast<int>(parent->children.size());
+  for (size_t i = 0; i < parent->children.size(); i++) {
+    if (parent->children[i] == node.id) return static_cast<int>(i + 1);
+  }
+  return 1;
+}
+
+void TreepubReaderActivity::renderStatusBar() const {
+  if (!treepub) return;
+  const Treepub::Node* node = treepub->getNode(currentNodeId);
+  if (!node) return;
+
+  int siblingCount = 1;
+  const int siblingIndex = indexInSiblings(*node, &siblingCount);
+  const int depth = static_cast<int>(treepub->getPathToRoot(currentNodeId).size());
+
+  char suffix[64];
+  snprintf(suffix, sizeof(suffix), " d%d %d/%d p%d/%d", depth, siblingIndex, siblingCount, currentPage + 1, totalPages);
+  std::string titleText = breadcrumb();
+  titleText += suffix;
+
+  GUI.drawStatusBar(renderer, 0.0f, currentPage + 1, totalPages, titleText);
+}
+
+void TreepubReaderActivity::renderHint() const {
+  if (lastHint.empty()) return;
+  if (millis() - lastHintAt > HINT_DURATION_MS) return;
+  renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() - UITheme::getInstance().getStatusBarHeight() - 10,
+                            lastHint.c_str(), true, EpdFontFamily::BOLD);
+}
+
+void TreepubReaderActivity::renderNode() {
+  const Treepub::Node* node = treepub ? treepub->getNode(currentNodeId) : nullptr;
+  if (!node) {
+    renderer.clearScreen();
+    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+    renderer.displayBuffer();
+    return;
+  }
+
+  renderer.clearScreen();
+  if (nodeIsImage) {
+    HalFile file;
+    if (Storage.openFileForRead("TRR", node->imagePath, file)) {
+      Bitmap bitmap(file);
+      if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+        const int pageWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
+        const int pageHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
+        const int x = std::max(orientedMarginLeft, (renderer.getScreenWidth() - bitmap.getWidth()) / 2);
+        const int y = std::max(orientedMarginTop, (renderer.getScreenHeight() - bitmap.getHeight()) / 2);
+        renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0);
+      } else {
+        renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_INVALID_BMP_FILE), true,
+                                  EpdFontFamily::BOLD);
+      }
+    } else {
+      renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_FILE_OPEN_FAILED), true,
+                                EpdFontFamily::BOLD);
+    }
+  } else {
+    const int fontId = SETTINGS.getReaderFontId();
+    const int lineHeight = renderer.getLineHeight(fontId);
+    const int startLine = currentPage * linesPerPage;
+    const int endLine = std::min(static_cast<int>(wrappedLines.size()), startLine + linesPerPage);
+    int y = orientedMarginTop;
+    for (int i = startLine; i < endLine; i++) {
+      renderer.drawText(fontId, orientedMarginLeft, y, wrappedLines[i].c_str(), true, EpdFontFamily::REGULAR);
+      y += lineHeight;
+    }
+  }
+
+  renderStatusBar();
+  renderHint();
+  renderer.displayBuffer();
+}
+
+bool TreepubReaderActivity::navigateToNode(const uint32_t nodeId, const bool pushHistory, const char* hintText) {
+  if (!treepub || !treepub->getNode(nodeId)) return false;
+  if (nodeId == currentNodeId) return true;
+  if (pushHistory) history.push_back(currentNodeId);
+  currentNodeId = nodeId;
+  currentPage = 0;
+  buildNodeLayout();
+  if (hintText) {
+    lastHint = hintText;
+    lastHintAt = millis();
+  }
+  saveProgress();
+  return true;
+}
+
+void TreepubReaderActivity::openNavigator() {
+  startActivityForResult(std::make_unique<TreepubNavigatorActivity>(renderer, mappedInput, treepub, currentNodeId, history),
+                         [this](const ActivityResult& result) {
+                           if (result.isCancelled) return;
+                           const auto data = std::get<TreepubNavigatorActivity::Result>(result.data);
+                           navigateToNode(data.nodeId, true, tr(STR_TREEPUB_MOVED));
+                           requestUpdate();
+                         });
+}
+
+bool TreepubReaderActivity::handleFormatInput() {
+  if (!treepub) return false;
+  if (ReaderUtils::isTouchMenuGesture(renderer, mappedInput) ||
+      mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    const Treepub::Node* node = treepub->getNode(currentNodeId);
+    if (!node) return false;
+    if (!node->children.empty()) {
+      openNavigator();
+    } else {
+      toggleBookmark();
+      lastHint = tr(STR_BOOKMARK_OPTION);
+      lastHintAt = millis();
+      requestUpdate();
+    }
+    return true;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    if (!history.empty()) {
+      const uint32_t prev = history.back();
+      history.pop_back();
+      navigateToNode(prev, false, tr(STR_TREEPUB_RETURNED));
+      requestUpdate();
+      return true;
+    }
+    if (const auto parentId = treepub->getParent(currentNodeId); parentId.has_value()) {
+      navigateToNode(parentId.value(), true, tr(STR_TREEPUB_RETURNED));
+      requestUpdate();
+      return true;
+    }
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    if (const auto prevSibling = treepub->getPrevSibling(currentNodeId); prevSibling.has_value()) {
+      navigateToNode(prevSibling.value(), true, tr(STR_TREEPUB_MOVED));
+      requestUpdate();
+      return true;
+    }
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    if (const auto nextSibling = treepub->getNextSibling(currentNodeId); nextSibling.has_value()) {
+      navigateToNode(nextSibling.value(), true, tr(STR_TREEPUB_MOVED));
+      requestUpdate();
+      return true;
+    }
+  }
+
+  if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, 1000)) {
+    toggleBookmark();
+    lastHint = tr(STR_BOOKMARK_OPTION);
+    lastHintAt = millis();
+    requestUpdate();
+    return true;
+  }
+  return false;
+}
+
+void TreepubReaderActivity::saveProgress() const {
+  if (!treepub) return;
+  uint8_t data[17];
+  memset(data, 0, sizeof(data));
+  uint8_t* p = data;
+  memcpy(p, &TREEPUB_PROGRESS_MAGIC, sizeof(TREEPUB_PROGRESS_MAGIC));
+  p += sizeof(TREEPUB_PROGRESS_MAGIC);
+  *p++ = TREEPUB_PROGRESS_VERSION;
+  memcpy(p, &currentNodeId, sizeof(currentNodeId));
+  p += sizeof(currentNodeId);
+  uint16_t page = static_cast<uint16_t>(std::max(0, currentPage));
+  memcpy(p, &page, sizeof(page));
+  p += sizeof(page);
+  uint16_t historyCount = static_cast<uint16_t>(std::min<size_t>(history.size(), 2));
+  memcpy(p, &historyCount, sizeof(historyCount));
+  p += sizeof(historyCount);
+  for (size_t i = history.size() > 2 ? history.size() - 2 : 0; i < history.size(); i++) {
+    memcpy(p, &history[i], sizeof(uint32_t));
+    p += sizeof(uint32_t);
+  }
+  ProgressFile::writeAtomic(treepub->getCachePath(), data, sizeof(data));
+}
+
+void TreepubReaderActivity::loadProgress() {
+  if (!treepub) return;
+  HalFile file;
+  if (!Storage.openFileForRead("TRR", treepub->getCachePath() + "/progress.bin", file)) return;
+  uint32_t magic = 0;
+  uint8_t version = 0;
+  uint32_t nodeId = 0;
+  uint16_t page = 0;
+  uint16_t historyCount = 0;
+  if (file.read(reinterpret_cast<uint8_t*>(&magic), sizeof(magic)) != sizeof(magic)) return;
+  if (file.read(&version, sizeof(version)) != sizeof(version)) return;
+  if (magic != TREEPUB_PROGRESS_MAGIC || version != TREEPUB_PROGRESS_VERSION) return;
+  if (file.read(reinterpret_cast<uint8_t*>(&nodeId), sizeof(nodeId)) != sizeof(nodeId)) return;
+  if (file.read(reinterpret_cast<uint8_t*>(&page), sizeof(page)) != sizeof(page)) return;
+  if (file.read(reinterpret_cast<uint8_t*>(&historyCount), sizeof(historyCount)) != sizeof(historyCount)) return;
+  if (treepub->getNode(nodeId)) {
+    currentNodeId = nodeId;
+    currentPage = page;
+  }
+  history.clear();
+  historyCount = std::min<uint16_t>(historyCount, 2);
+  for (uint16_t i = 0; i < historyCount; i++) {
+    uint32_t h = 0;
+    if (file.read(reinterpret_cast<uint8_t*>(&h), sizeof(h)) != sizeof(h)) break;
+    if (treepub->getNode(h)) history.push_back(h);
+  }
+}
+
+void TreepubReaderActivity::saveBookmarks() const {
+  if (!treepub) return;
+  const std::string path = treepub->getCachePath() + "/bookmarks.bin";
+  HalFile file;
+  if (!Storage.openFileForWrite("TRR", path, file)) return;
+  file.write(reinterpret_cast<const uint8_t*>(&TREEPUB_BOOKMARK_MAGIC), sizeof(TREEPUB_BOOKMARK_MAGIC));
+  file.write(&TREEPUB_BOOKMARK_VERSION, sizeof(TREEPUB_BOOKMARK_VERSION));
+  const uint16_t count = static_cast<uint16_t>(bookmarks.size());
+  file.write(reinterpret_cast<const uint8_t*>(&count), sizeof(count));
+  if (count > 0) file.write(reinterpret_cast<const uint8_t*>(bookmarks.data()), sizeof(uint32_t) * count);
+}
+
+void TreepubReaderActivity::loadBookmarks() {
+  bookmarks.clear();
+  if (!treepub) return;
+  const std::string path = treepub->getCachePath() + "/bookmarks.bin";
+  HalFile file;
+  if (!Storage.openFileForRead("TRR", path, file)) return;
+  uint32_t magic = 0;
+  uint8_t version = 0;
+  uint16_t count = 0;
+  if (file.read(reinterpret_cast<uint8_t*>(&magic), sizeof(magic)) != sizeof(magic)) return;
+  if (file.read(&version, sizeof(version)) != sizeof(version)) return;
+  if (magic != TREEPUB_BOOKMARK_MAGIC || version != TREEPUB_BOOKMARK_VERSION) return;
+  if (file.read(reinterpret_cast<uint8_t*>(&count), sizeof(count)) != sizeof(count)) return;
+  bookmarks.resize(count);
+  if (count > 0) {
+    const size_t bytes = sizeof(uint32_t) * count;
+    if (file.read(reinterpret_cast<uint8_t*>(bookmarks.data()), bytes) != static_cast<int>(bytes)) bookmarks.clear();
+  }
+}
+
+void TreepubReaderActivity::toggleBookmark() {
+  const auto it = std::find(bookmarks.begin(), bookmarks.end(), currentNodeId);
+  if (it == bookmarks.end()) {
+    bookmarks.push_back(currentNodeId);
+  } else {
+    bookmarks.erase(it);
+  }
+  saveBookmarks();
+}
+
+void TreepubReaderActivity::renderBook() {
+  if (!treepub) return;
+  buildNodeLayout();
+  renderNode();
+  saveProgress();
+}
+
+bool TreepubReaderActivity::pageTurn(const bool isForward) {
+  buildNodeLayout();
+  if (!treepub) return false;
+  if (!nodeIsImage) {
+    if (isForward && currentPage + 1 < totalPages) {
+      currentPage++;
+      return true;
+    }
+    if (!isForward && currentPage > 0) {
+      currentPage--;
+      return true;
+    }
+  }
+
+  if (isForward) {
+    if (const auto nextSibling = treepub->getNextSibling(currentNodeId); nextSibling.has_value()) {
+      return navigateToNode(nextSibling.value(), true, tr(STR_TREEPUB_MOVED));
+    }
+    if (const auto nextBranch = treepub->findNextBranchNode(currentNodeId); nextBranch.has_value()) {
+      return navigateToNode(nextBranch.value(), true, tr(STR_TREEPUB_MOVED));
+    }
+  } else {
+    if (const auto prevSibling = treepub->getPrevSibling(currentNodeId); prevSibling.has_value()) {
+      bool moved = navigateToNode(prevSibling.value(), true, tr(STR_TREEPUB_MOVED));
+      if (moved) {
+        buildNodeLayout();
+        currentPage = totalPages - 1;
+      }
+      return moved;
+    }
+    if (const auto parent = treepub->getParent(currentNodeId); parent.has_value()) {
+      bool moved = navigateToNode(parent.value(), true, tr(STR_TREEPUB_RETURNED));
+      if (moved) {
+        buildNodeLayout();
+        currentPage = totalPages - 1;
+      }
+      return moved;
+    }
+  }
+  return false;
+}
+
+bool TreepubReaderActivity::skipPages(const int amount) {
+  if (amount == 0) return false;
+  return pageTurn(amount > 0);
+}
+
+bool TreepubReaderActivity::isAtEndOfBook() const {
+  if (!treepub) return true;
+  const Treepub::Node* node = treepub->getNode(currentNodeId);
+  if (!node) return true;
+  if (!nodeIsImage && currentPage + 1 < totalPages) return false;
+  return !treepub->findNextBranchNode(currentNodeId).has_value() && !treepub->getNextSibling(currentNodeId).has_value();
+}
+
+void TreepubReaderActivity::onReturnFromEndOfBook() {
+  if (const auto parent = treepub->getParent(currentNodeId); parent.has_value()) {
+    navigateToNode(parent.value(), true, tr(STR_TREEPUB_RETURNED));
+  } else {
+    navigateToNode(treepub->getRootId(), false, tr(STR_RESUME));
+  }
+}
+
+ScreenshotInfo TreepubReaderActivity::getScreenshotInfo() const {
+  ScreenshotInfo info;
+  info.showStatusBar = true;
+  info.title = treepub ? treepub->getTitle() : "";
+  return info;
+}

@@ -52,6 +52,12 @@ inline bool hasEpubExtension(const String& fileName) {
   return hasEpubExtension(std::string_view{fileName.c_str(), fileName.length()});
 }
 
+// Check for .treepub extension (case-insensitive)
+bool hasTreepubExtension(std::string_view fileName);
+inline bool hasTreepubExtension(const String& fileName) {
+  return hasTreepubExtension(std::string_view{fileName.c_str(), fileName.length()});
+}
+
 // Check for either .xtc or .xtch extension (case-insensitive)
 bool hasXtcExtension(std::string_view fileName);
 

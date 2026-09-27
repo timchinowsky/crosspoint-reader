@@ -409,6 +409,34 @@ if (parsedSize != fileSize) {
 }
 ```
 
+## `treepub.bin`
+
+### Version 1
+
+`treepub.bin` is the metadata/cache index for `.treepub` books under
+`/.crosspoint/treepub_<hash>/`.
+
+Layout:
+
+- `u32 magic` = `0x42505254` (`"TRPB"`)
+- `u8 version` = `1`
+- `String title`
+- `String author`
+- `u32 rootId`
+- `u32 nodeCount`
+- Repeated `nodeCount` times:
+  - `u32 id`
+  - `u32 parentId`
+  - `String title`
+  - `String text`
+  - `String imagePath`
+  - `u32 childCount`
+  - `u32 children[childCount]`
+
+This cache stores explicit node records plus explicit edges (`children[]`) and
+stable node IDs. Version mismatches invalidate the cache and force a rebuild
+from the source `.treepub` JSON.
+
 ## CLX1 — library index (`.crosspoint/library.idx`)
 
 Written by `lib/LibraryIndex/LibraryBuilder.cpp`, read by `LibraryIndexFile`. One

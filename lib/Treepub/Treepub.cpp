@@ -146,8 +146,7 @@ bool Treepub::saveToCache() const {
   }
 
   if (!file.flush()) return false;
-  if (Storage.exists(finalPath.c_str()) && !Storage.remove(finalPath.c_str())) return false;
-  if (!Storage.rename(tmpPath.c_str(), finalPath.c_str())) return false;
+  if (!Storage.replaceFile(tmpPath.c_str(), finalPath.c_str())) return false;
   return true;
 }
 

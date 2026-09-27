@@ -64,8 +64,10 @@ void TreepubNavigatorActivity::rebuildRows() {
   rowItems.reserve(rows.size());
   for (size_t i = 0; i < rows.size(); i++) {
     rowLabels.push_back(rows[i].label);
+  }
+  for (size_t i = 0; i < rows.size(); i++) {
     fui::ListItem item;
-    item.label = rowLabels.back().c_str();
+    item.label = rowLabels[i].c_str();
     item.actionValue = static_cast<int16_t>(i);
     rowItems.push_back(item);
   }

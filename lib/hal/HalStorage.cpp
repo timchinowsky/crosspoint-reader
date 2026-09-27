@@ -182,6 +182,12 @@ bool HalStorage::rename(const char* oldPath, const char* newPath) {
   HAL_STORAGE_WRAPPED_CALL(rename, oldPath, newPath);
 }
 
+bool HalStorage::replaceFile(const char* tmpPath, const char* finalPath) {
+  StorageLock lock;
+  if (SDCard.exists(finalPath) && !SDCard.remove(finalPath)) return false;
+  return SDCard.rename(tmpPath, finalPath);
+}
+
 bool HalStorage::rmdir(const char* path) { HAL_STORAGE_WRAPPED_CALL(rmdir, path); }
 
 bool HalStorage::openFileForRead(const char* moduleName, const char* path, HalFile& file) {

@@ -38,7 +38,6 @@ bool TreepubReaderActivity::loadBook() {
   }
   treepub = std::move(loadedTreepub);
   treepub->setupCacheDir();
-  history.reserve(HISTORY_MAX);
   bookmarks.reserve(BOOKMARK_MAX);
   wrappedLines.reserve(64);
   currentNodeId = treepub->getRootId();
@@ -140,8 +139,8 @@ void TreepubReaderActivity::renderStatusBar() const {
   char suffix[64];
   snprintf(suffix, sizeof(suffix), tr(STR_TREEPUB_STATUS_SUFFIX), cachedDepth, siblingIndex, siblingCount,
            currentPage + 1, totalPages);
-  std::string titleText = breadcrumb();
-  titleText += suffix;
+  char titleText[160];
+  snprintf(titleText, sizeof(titleText), "%s%s", breadcrumb().c_str(), suffix);
 
   GUI.drawStatusBar(renderer, 0.0f, currentPage + 1, totalPages, titleText);
 }
@@ -368,11 +367,7 @@ void TreepubReaderActivity::saveBookmarks() const {
       return;
     }
   }
-  if (Storage.exists(finalPath.c_str()) && !Storage.remove(finalPath.c_str())) {
-    LOG_ERR("TRR", "Failed to remove treepub bookmarks");
-    return;
-  }
-  if (!Storage.rename(tmpPath.c_str(), finalPath.c_str())) LOG_ERR("TRR", "Failed to commit treepub bookmarks");
+  if (!Storage.replaceFile(tmpPath.c_str(), finalPath.c_str())) LOG_ERR("TRR", "Failed to commit treepub bookmarks");
 }
 
 void TreepubReaderActivity::loadBookmarks() {

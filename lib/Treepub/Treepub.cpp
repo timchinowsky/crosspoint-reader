@@ -7,12 +7,12 @@
 #include <algorithm>
 #include <utility>
 
+#include "TreepubLimits.h"
+
 namespace {
 constexpr uint32_t TREEPUB_CACHE_MAGIC = 0x42505254;  // "TRPB"
 constexpr uint8_t TREEPUB_CACHE_VERSION = 1;
 constexpr char TREEPUB_CACHE_FILE[] = "/treepub.bin";
-constexpr size_t MAX_TREEPUB_FILE_SIZE = 88 * 1024;  // Keep source-size contract aligned with JSON doc capacity.
-constexpr size_t TREEPUB_JSON_DOC_MAX = 48 * 1024;  // Cap parser heap for ESP32-C3 while accepting medium treepub docs.
 }  // namespace
 
 Treepub::Treepub(std::string path, std::string cacheBase)
@@ -149,12 +149,12 @@ bool Treepub::parseSourceFile() {
   }
 
   const size_t fileSize = file.size();
-  if (fileSize == 0 || fileSize > MAX_TREEPUB_FILE_SIZE) {
+  if (!TreepubLimits::isValidSourceSize(fileSize)) {
     LOG_ERR("TRP", "Invalid treepub size: %u", static_cast<unsigned>(fileSize));
     return false;
   }
 
-  const size_t docCapacity = std::clamp<size_t>((fileSize / 2) + 4096, 8 * 1024, TREEPUB_JSON_DOC_MAX);
+  const size_t docCapacity = TreepubLimits::computeDocCapacity(fileSize);
   DynamicJsonDocument doc(docCapacity);
   const auto err = deserializeJson(doc, file);
   if (err) {
@@ -211,7 +211,10 @@ bool Treepub::parseSourceFile() {
   for (const auto& node : nodes) {
     for (const uint32_t childId : node.children) {
       auto it = idToIndex.find(childId);
-      if (it == idToIndex.end()) continue;
+      if (it == idToIndex.end()) {
+        LOG_ERR("TRP", "Missing child node id: %u", static_cast<unsigned>(childId));
+        return false;
+      }
       Node& child = nodes[it->second];
       if (child.parentId == 0) {
         child.parentId = node.id;

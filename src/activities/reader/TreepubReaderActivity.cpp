@@ -352,8 +352,14 @@ void TreepubReaderActivity::saveBookmarks() const {
   const std::string tmpPath = treepub->getCachePath() + "/bookmarks.bin.tmp";
   {
     HalFile file;
-    if (!Storage.openFileForWrite("TRR", tmpPath, file)) return;
-    if (file.write(data.get(), payloadBytes) != payloadBytes) return;
+    if (!Storage.openFileForWrite("TRR", tmpPath, file)) {
+      LOG_ERR("TRR", "Failed to open treepub bookmarks tmp");
+      return;
+    }
+    if (file.write(data.get(), payloadBytes) != payloadBytes) {
+      LOG_ERR("TRR", "Failed to write treepub bookmarks tmp");
+      return;
+    }
     if (!file.flush()) {
       LOG_ERR("TRR", "Failed to flush treepub bookmarks tmp");
       return;

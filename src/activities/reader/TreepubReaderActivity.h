@@ -9,7 +9,7 @@
 #include "ReaderActivity.h"
 
 class TreepubReaderActivity final : public ReaderActivity {
-  std::shared_ptr<Treepub> treepub;
+  std::unique_ptr<Treepub> treepub;
   uint32_t currentNodeId = 0;
   int currentPage = 0;
   int totalPages = 1;

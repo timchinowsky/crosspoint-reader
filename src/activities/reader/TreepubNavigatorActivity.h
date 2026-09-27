@@ -2,7 +2,6 @@
 
 #include <Treepub.h>
 
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -21,7 +20,7 @@ class TreepubNavigatorActivity final : public UiListActivity {
   };
 
  private:
-  std::shared_ptr<Treepub> treepub;
+  Treepub* treepub = nullptr;
   uint32_t currentNodeId = 0;
   std::vector<uint32_t> history;
   std::vector<Row> rows;
@@ -37,7 +36,7 @@ class TreepubNavigatorActivity final : public UiListActivity {
   void drawChrome() override;
 
  public:
-  TreepubNavigatorActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::shared_ptr<Treepub> treepub,
+  TreepubNavigatorActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, Treepub* treepub,
                            uint32_t currentNodeId, std::vector<uint32_t> history);
   void onEnter() override;
 };

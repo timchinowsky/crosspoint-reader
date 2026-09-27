@@ -11,10 +11,10 @@
 namespace fui = freeink::ui;
 
 TreepubNavigatorActivity::TreepubNavigatorActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                   std::shared_ptr<Treepub> treepub, const uint32_t currentNodeId,
+                                                   Treepub* treepub, const uint32_t currentNodeId,
                                                    std::vector<uint32_t> history)
     : UiListActivity("TreepubNavigator", renderer, mappedInput),
-      treepub(std::move(treepub)),
+      treepub(treepub),
       currentNodeId(currentNodeId),
       history(std::move(history)) {}
 

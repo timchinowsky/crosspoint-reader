@@ -111,33 +111,38 @@ bool Treepub::loadFromCache() {
 }
 
 bool Treepub::saveToCache() const {
+  const std::string finalPath = cachePath + TREEPUB_CACHE_FILE;
+  const std::string tmpPath = finalPath + ".tmp";
   HalFile file;
-  if (!Storage.openFileForWrite("TRP", cachePath + TREEPUB_CACHE_FILE, file)) return false;
+  if (!Storage.openFileForWrite("TRP", tmpPath, file)) return false;
 
-  if (file.write(reinterpret_cast<const uint8_t*>(&TREEPUB_CACHE_MAGIC), sizeof(TREEPUB_CACHE_MAGIC)) !=
-      sizeof(TREEPUB_CACHE_MAGIC))
-    return false;
-  if (file.write(&TREEPUB_CACHE_VERSION, sizeof(TREEPUB_CACHE_VERSION)) != sizeof(TREEPUB_CACHE_VERSION)) return false;
+  const auto writeExact = [&file](const void* data, const size_t bytes) -> bool {
+    return file.write(reinterpret_cast<const uint8_t*>(data), bytes) == static_cast<int>(bytes);
+  };
+
+  if (!writeExact(&TREEPUB_CACHE_MAGIC, sizeof(TREEPUB_CACHE_MAGIC))) return false;
+  if (!writeExact(&TREEPUB_CACHE_VERSION, sizeof(TREEPUB_CACHE_VERSION))) return false;
   if (!writeString(file, title) || !writeString(file, author)) return false;
-  if (file.write(reinterpret_cast<const uint8_t*>(&rootId), sizeof(rootId)) != sizeof(rootId)) return false;
+  if (!writeExact(&rootId, sizeof(rootId))) return false;
   const uint32_t nodeCount = static_cast<uint32_t>(nodes.size());
-  if (file.write(reinterpret_cast<const uint8_t*>(&nodeCount), sizeof(nodeCount)) != sizeof(nodeCount)) return false;
+  if (!writeExact(&nodeCount, sizeof(nodeCount))) return false;
 
   for (const auto& node : nodes) {
-    if (file.write(reinterpret_cast<const uint8_t*>(&node.id), sizeof(node.id)) != sizeof(node.id)) return false;
-    if (file.write(reinterpret_cast<const uint8_t*>(&node.parentId), sizeof(node.parentId)) != sizeof(node.parentId))
-      return false;
+    if (!writeExact(&node.id, sizeof(node.id))) return false;
+    if (!writeExact(&node.parentId, sizeof(node.parentId))) return false;
     if (!writeString(file, node.title) || !writeString(file, node.text) || !writeString(file, node.imagePath))
       return false;
     const uint32_t childCount = static_cast<uint32_t>(node.children.size());
-    if (file.write(reinterpret_cast<const uint8_t*>(&childCount), sizeof(childCount)) != sizeof(childCount))
-      return false;
+    if (!writeExact(&childCount, sizeof(childCount))) return false;
     if (childCount > 0) {
       const size_t bytes = sizeof(uint32_t) * childCount;
-      if (file.write(reinterpret_cast<const uint8_t*>(node.children.data()), bytes) != bytes) return false;
+      if (!writeExact(node.children.data(), bytes)) return false;
     }
   }
 
+  if (!file.flush()) return false;
+  if (Storage.exists(finalPath.c_str()) && !Storage.remove(finalPath.c_str())) return false;
+  if (!Storage.rename(tmpPath.c_str(), finalPath.c_str())) return false;
   return true;
 }
 

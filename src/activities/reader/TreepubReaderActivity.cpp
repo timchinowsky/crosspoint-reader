@@ -36,7 +36,7 @@ bool TreepubReaderActivity::loadBook() {
     LOG_ERR("TRR", "Failed to load treepub");
     return false;
   }
-  treepub = std::shared_ptr<Treepub>(std::move(loadedTreepub));
+  treepub = std::move(loadedTreepub);
   treepub->setupCacheDir();
   history.reserve(HISTORY_MAX);
   bookmarks.reserve(BOOKMARK_MAX);
@@ -138,8 +138,8 @@ void TreepubReaderActivity::renderStatusBar() const {
   int siblingCount = 1;
   const int siblingIndex = indexInSiblings(*node, &siblingCount);
   char suffix[64];
-  snprintf(suffix, sizeof(suffix), " d%d %d/%d p%d/%d", cachedDepth, siblingIndex, siblingCount, currentPage + 1,
-           totalPages);
+  snprintf(suffix, sizeof(suffix), tr(STR_TREEPUB_STATUS_SUFFIX), cachedDepth, siblingIndex, siblingCount,
+           currentPage + 1, totalPages);
   std::string titleText = breadcrumb();
   titleText += suffix;
 
@@ -221,7 +221,7 @@ bool TreepubReaderActivity::navigateToNode(const uint32_t nodeId, const bool pus
 
 void TreepubReaderActivity::openNavigator() {
   startActivityForResult(
-      std::make_unique<TreepubNavigatorActivity>(renderer, mappedInput, treepub, currentNodeId, history),
+      std::make_unique<TreepubNavigatorActivity>(renderer, mappedInput, treepub.get(), currentNodeId, history),
       [this](const ActivityResult& result) {
         if (result.isCancelled) return;
         const auto data = std::get<TreepubNavigatorActivity::Result>(result.data);
@@ -356,7 +356,7 @@ void TreepubReaderActivity::saveBookmarks() const {
       LOG_ERR("TRR", "Failed to open treepub bookmarks tmp");
       return;
     }
-    if (file.write(data.get(), payloadBytes) != payloadBytes) {
+    if (file.write(data.get(), payloadBytes) != static_cast<int>(payloadBytes)) {
       LOG_ERR("TRR", "Failed to write treepub bookmarks tmp");
       return;
     }

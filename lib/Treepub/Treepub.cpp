@@ -5,6 +5,7 @@
 #include <Serialization.h>
 
 #include <algorithm>
+#include <unordered_set>
 #include <utility>
 
 #include "TreepubLimits.h"
@@ -43,8 +44,12 @@ bool Treepub::readString(HalFile& file, std::string& value) {
 }
 
 void Treepub::setupCacheDir() const {
-  if (!Storage.exists(cacheBasePath.c_str())) Storage.mkdir(cacheBasePath.c_str());
-  if (!Storage.exists(cachePath.c_str())) Storage.mkdir(cachePath.c_str());
+  if (!Storage.exists(cacheBasePath.c_str()) && !Storage.mkdir(cacheBasePath.c_str())) {
+    LOG_ERR("TRP", "Failed to create treepub cache base dir");
+  }
+  if (!Storage.exists(cachePath.c_str()) && !Storage.mkdir(cachePath.c_str())) {
+    LOG_ERR("TRP", "Failed to create treepub cache dir");
+  }
 }
 
 bool Treepub::clearCache() const {
@@ -285,11 +290,19 @@ std::optional<uint32_t> Treepub::getPrevSibling(const uint32_t nodeId) const {
 
 std::vector<uint32_t> Treepub::getPathToRoot(uint32_t nodeId) const {
   std::vector<uint32_t> out;
+  out.reserve(nodes.size());
+  std::unordered_set<uint32_t> visited;
+  visited.reserve(nodes.size());
   const Node* node = getNode(nodeId);
   while (node) {
+    if (!visited.insert(node->id).second) {
+      LOG_ERR("TRP", "Cycle in treepub parent chain at node %u", static_cast<unsigned>(node->id));
+      break;
+    }
     out.push_back(node->id);
     if (node->parentId == 0) break;
     node = getNode(node->parentId);
+    if (out.size() > nodes.size()) break;
   }
   std::reverse(out.begin(), out.end());
   return out;

@@ -2,6 +2,7 @@
 
 #include <Treepub.h>
 
+#include <deque>
 #include <memory>
 #include <string>
 #include <vector>
@@ -13,7 +14,7 @@ class TreepubReaderActivity final : public ReaderActivity {
   uint32_t currentNodeId = 0;
   int currentPage = 0;
   int totalPages = 1;
-  std::vector<uint32_t> history;
+  std::deque<uint32_t> history;
   std::vector<uint32_t> bookmarks;
 
   std::vector<std::string> wrappedLines;

@@ -220,8 +220,9 @@ bool TreepubReaderActivity::navigateToNode(const uint32_t nodeId, const bool pus
 }
 
 void TreepubReaderActivity::openNavigator() {
+  std::vector<uint32_t> historySnapshot(history.begin(), history.end());
   startActivityForResult(
-      std::make_unique<TreepubNavigatorActivity>(renderer, mappedInput, treepub.get(), currentNodeId, history),
+      std::make_unique<TreepubNavigatorActivity>(renderer, mappedInput, treepub.get(), currentNodeId, historySnapshot),
       [this](const ActivityResult& result) {
         if (result.isCancelled) return;
         const auto data = std::get<TreepubNavigatorActivity::Result>(result.data);
@@ -309,21 +310,23 @@ void TreepubReaderActivity::saveProgress() const {
 
 void TreepubReaderActivity::loadProgress() {
   if (!treepub) return;
-  HalFile file;
-  const std::string path = treepub->getCachePath() + "/progress.bin";
-  if (!Storage.openFileForRead("TRR", path.c_str(), file)) return;
-  auto data = makeUniqueNoThrow<uint8_t[]>(TreepubProgressCodec::ENCODED_SIZE);
-  if (!data) {
-    LOG_ERR("TRR", "OOM reading treepub progress");
-    return;
-  }
-  if (file.read(data.get(), TreepubProgressCodec::ENCODED_SIZE) != static_cast<int>(TreepubProgressCodec::ENCODED_SIZE))
-    return;
-  TreepubProgressCodec::ProgressRecord record;
-  if (!TreepubProgressCodec::decode(data.get(), TreepubProgressCodec::ENCODED_SIZE, &record)) return;
-  if (treepub->getNode(record.nodeId)) {
-    currentNodeId = record.nodeId;
-    currentPage = static_cast<int>(record.page);
+  {
+    HalFile file;
+    const std::string path = treepub->getCachePath() + "/progress.bin";
+    if (Storage.openFileForRead("TRR", path.c_str(), file)) {
+      auto data = makeUniqueNoThrow<uint8_t[]>(TreepubProgressCodec::ENCODED_SIZE);
+      if (!data) {
+        LOG_ERR("TRR", "OOM reading treepub progress");
+      } else if (file.read(data.get(), TreepubProgressCodec::ENCODED_SIZE) ==
+                 static_cast<int>(TreepubProgressCodec::ENCODED_SIZE)) {
+        TreepubProgressCodec::ProgressRecord record;
+        if (TreepubProgressCodec::decode(data.get(), TreepubProgressCodec::ENCODED_SIZE, &record) &&
+            treepub->getNode(record.nodeId)) {
+          currentNodeId = record.nodeId;
+          currentPage = static_cast<int>(record.page);
+        }
+      }
+    }
   }
   history.clear();
   refreshPositionCache();

@@ -24,6 +24,8 @@ class TreepubReaderActivity final : public ReaderActivity {
   int orientedMarginLeft = 0;
   int viewportWidth = 0;
   bool nodeIsImage = false;
+  std::string cachedBreadcrumb;
+  int cachedDepth = 1;
 
   std::string lastHint;
   unsigned long lastHintAt = 0;
@@ -44,6 +46,7 @@ class TreepubReaderActivity final : public ReaderActivity {
   void saveBookmarks() const;
   void toggleBookmark();
   int indexInSiblings(const Treepub::Node& node, int* totalSiblings) const;
+  void refreshPositionCache();
   std::string breadcrumb() const;
 
   bool loadBook() override;

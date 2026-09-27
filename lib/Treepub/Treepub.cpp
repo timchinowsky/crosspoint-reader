@@ -12,6 +12,7 @@ constexpr uint32_t TREEPUB_CACHE_MAGIC = 0x42505254;  // "TRPB"
 constexpr uint8_t TREEPUB_CACHE_VERSION = 1;
 constexpr char TREEPUB_CACHE_FILE[] = "/treepub.bin";
 constexpr size_t MAX_TREEPUB_FILE_SIZE = 512 * 1024;
+constexpr size_t TREEPUB_JSON_DOC_MAX = 48 * 1024;  // Cap parser heap for ESP32-C3 while accepting medium treepub docs.
 }  // namespace
 
 Treepub::Treepub(std::string path, std::string cacheBase)
@@ -153,7 +154,7 @@ bool Treepub::parseSourceFile() {
     return false;
   }
 
-  const size_t docCapacity = std::clamp<size_t>((fileSize / 2) + 4096, 8 * 1024, 48 * 1024);
+  const size_t docCapacity = std::clamp<size_t>((fileSize / 2) + 4096, 8 * 1024, TREEPUB_JSON_DOC_MAX);
   DynamicJsonDocument doc(docCapacity);
   const auto err = deserializeJson(doc, file);
   if (err) {
@@ -222,8 +223,10 @@ bool Treepub::parseSourceFile() {
 bool Treepub::load() {
   if (loaded) return true;
   setupCacheDir();
-  if (!loadFromCache() && !parseSourceFile()) return false;
-  saveToCache();
+  if (!loadFromCache()) {
+    if (!parseSourceFile()) return false;
+    saveToCache();
+  }
   loaded = true;
   return true;
 }

@@ -44,6 +44,7 @@ bool TreepubReaderActivity::loadBook() {
   currentNodeId = treepub->getRootId();
   loadProgress();
   loadBookmarks();
+  refreshPositionCache();
   return treepub->getNode(currentNodeId) != nullptr;
 }
 
@@ -84,22 +85,28 @@ void TreepubReaderActivity::buildNodeLayout() {
   if (currentPage >= totalPages) currentPage = totalPages - 1;
 }
 
-std::string TreepubReaderActivity::breadcrumb() const {
-  if (!treepub) return "";
+void TreepubReaderActivity::refreshPositionCache() {
+  if (!treepub) {
+    cachedDepth = 1;
+    cachedBreadcrumb.clear();
+    return;
+  }
   std::vector<uint32_t> ids = treepub->getPathToRoot(currentNodeId);
-  std::string out;
+  cachedDepth = std::max(1, static_cast<int>(ids.size()));
+  cachedBreadcrumb.clear();
   for (size_t i = 0; i < ids.size(); i++) {
     const Treepub::Node* node = treepub->getNode(ids[i]);
     if (!node) continue;
-    if (!out.empty()) out += " > ";
-    out += node->title;
+    if (!cachedBreadcrumb.empty()) cachedBreadcrumb += " > ";
+    cachedBreadcrumb += node->title;
   }
   constexpr size_t MAX_BREADCRUMB = 52;
-  if (out.size() > MAX_BREADCRUMB) {
-    out = "..." + out.substr(out.size() - (MAX_BREADCRUMB - 3));
+  if (cachedBreadcrumb.size() > MAX_BREADCRUMB) {
+    cachedBreadcrumb = "..." + cachedBreadcrumb.substr(cachedBreadcrumb.size() - (MAX_BREADCRUMB - 3));
   }
-  return out;
 }
+
+std::string TreepubReaderActivity::breadcrumb() const { return cachedBreadcrumb; }
 
 int TreepubReaderActivity::indexInSiblings(const Treepub::Node& node, int* totalSiblings) const {
   if (!treepub) {
@@ -130,10 +137,9 @@ void TreepubReaderActivity::renderStatusBar() const {
 
   int siblingCount = 1;
   const int siblingIndex = indexInSiblings(*node, &siblingCount);
-  const int depth = static_cast<int>(treepub->getPathToRoot(currentNodeId).size());
-
   char suffix[64];
-  snprintf(suffix, sizeof(suffix), " d%d %d/%d p%d/%d", depth, siblingIndex, siblingCount, currentPage + 1, totalPages);
+  snprintf(suffix, sizeof(suffix), " d%d %d/%d p%d/%d", cachedDepth, siblingIndex, siblingCount, currentPage + 1,
+           totalPages);
   std::string titleText = breadcrumb();
   titleText += suffix;
 
@@ -203,6 +209,7 @@ bool TreepubReaderActivity::navigateToNode(const uint32_t nodeId, const bool pus
   }
   currentNodeId = nodeId;
   currentPage = 0;
+  refreshPositionCache();
   buildNodeLayout();
   if (hintText) {
     lastHint = hintText;
@@ -330,13 +337,15 @@ void TreepubReaderActivity::loadProgress() {
     currentPage = page;
   }
   history.clear();
-  history.reserve(HISTORY_MAX);
   historyCount = std::min<uint16_t>(historyCount, static_cast<uint16_t>(HISTORY_MAX));
   for (uint16_t i = 0; i < historyCount; i++) {
     uint32_t h = 0;
     if (file.read(reinterpret_cast<uint8_t*>(&h), sizeof(h)) != sizeof(h)) break;
-    if (treepub->getNode(h)) history.push_back(h);
   }
+  // Resume restores only a stable location; do not carry historical back-stack across sessions.
+  history.clear();
+  refreshPositionCache();
+  buildNodeLayout();
 }
 
 void TreepubReaderActivity::saveBookmarks() const {
@@ -393,6 +402,7 @@ void TreepubReaderActivity::loadBookmarks() {
 void TreepubReaderActivity::toggleBookmark() {
   const auto it = std::find(bookmarks.begin(), bookmarks.end(), currentNodeId);
   if (it == bookmarks.end()) {
+    if (bookmarks.size() >= BOOKMARK_MAX) bookmarks.erase(bookmarks.begin());
     bookmarks.push_back(currentNodeId);
   } else {
     bookmarks.erase(it);

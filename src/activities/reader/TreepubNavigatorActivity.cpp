@@ -56,6 +56,7 @@ void TreepubNavigatorActivity::rebuildRows() {
     if (*it == currentNodeId) continue;
     const Treepub::Node* node = treepub->getNode(*it);
     if (!node) continue;
+    if (std::any_of(rows.begin(), rows.end(), [node](const Row& row) { return row.nodeId == node->id; })) continue;
     rows.push_back(Row{node->id, std::string("# ") + node->title});
   }
 

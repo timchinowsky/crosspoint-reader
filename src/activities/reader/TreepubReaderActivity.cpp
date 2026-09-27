@@ -44,11 +44,13 @@ bool TreepubReaderActivity::loadBook() {
 }
 
 void TreepubReaderActivity::updateLayoutMetrics() {
-  renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom, &orientedMarginLeft);
+  renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
+                                   &orientedMarginLeft);
   orientedMarginTop += SETTINGS.screenMargin;
   orientedMarginLeft += SETTINGS.screenMargin;
   orientedMarginRight += SETTINGS.screenMargin;
-  orientedMarginBottom += std::max(SETTINGS.screenMargin, static_cast<uint8_t>(UITheme::getInstance().getStatusBarHeight()));
+  orientedMarginBottom +=
+      std::max(SETTINGS.screenMargin, static_cast<uint8_t>(UITheme::getInstance().getStatusBarHeight()));
   viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
   const int viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
   linesPerPage = std::max(1, viewportHeight / renderer.getLineHeight(SETTINGS.getReaderFontId()));
@@ -79,8 +81,8 @@ void TreepubReaderActivity::buildNodeLayout() {
     } else {
       while (!line.empty()) {
         size_t breakPos = line.size();
-        while (breakPos > 0 &&
-               renderer.getTextAdvanceX(fontId, line.substr(0, breakPos).c_str(), EpdFontFamily::REGULAR) > viewportWidth) {
+        while (breakPos > 0 && renderer.getTextAdvanceX(fontId, line.substr(0, breakPos).c_str(),
+                                                        EpdFontFamily::REGULAR) > viewportWidth) {
           size_t spacePos = line.rfind(' ', breakPos - 1);
           if (spacePos != std::string::npos && spacePos > 0) {
             breakPos = spacePos;
@@ -163,7 +165,8 @@ void TreepubReaderActivity::renderStatusBar() const {
 void TreepubReaderActivity::renderHint() const {
   if (lastHint.empty()) return;
   if (millis() - lastHintAt > HINT_DURATION_MS) return;
-  renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() - UITheme::getInstance().getStatusBarHeight() - 10,
+  renderer.drawCenteredText(UI_10_FONT_ID,
+                            renderer.getScreenHeight() - UITheme::getInstance().getStatusBarHeight() - 10,
                             lastHint.c_str(), true, EpdFontFamily::BOLD);
 }
 
@@ -171,7 +174,8 @@ void TreepubReaderActivity::renderNode() {
   const Treepub::Node* node = treepub ? treepub->getNode(currentNodeId) : nullptr;
   if (!node) {
     renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_PAGE_LOAD_ERROR), true,
+                              EpdFontFamily::BOLD);
     renderer.displayBuffer();
     return;
   }
@@ -228,13 +232,14 @@ bool TreepubReaderActivity::navigateToNode(const uint32_t nodeId, const bool pus
 }
 
 void TreepubReaderActivity::openNavigator() {
-  startActivityForResult(std::make_unique<TreepubNavigatorActivity>(renderer, mappedInput, treepub, currentNodeId, history),
-                         [this](const ActivityResult& result) {
-                           if (result.isCancelled) return;
-                           const auto data = std::get<TreepubNavigatorActivity::Result>(result.data);
-                           navigateToNode(data.nodeId, true, tr(STR_TREEPUB_MOVED));
-                           requestUpdate();
-                         });
+  startActivityForResult(
+      std::make_unique<TreepubNavigatorActivity>(renderer, mappedInput, treepub, currentNodeId, history),
+      [this](const ActivityResult& result) {
+        if (result.isCancelled) return;
+        const auto data = std::get<TreepubNavigatorActivity::Result>(result.data);
+        navigateToNode(data.nodeId, true, tr(STR_TREEPUB_MOVED));
+        requestUpdate();
+      });
 }
 
 bool TreepubReaderActivity::handleFormatInput() {
@@ -297,25 +302,31 @@ bool TreepubReaderActivity::handleFormatInput() {
 
 void TreepubReaderActivity::saveProgress() const {
   if (!treepub) return;
-  uint8_t data[17];
-  memset(data, 0, sizeof(data));
-  uint8_t* p = data;
+  const uint16_t historyCount = static_cast<uint16_t>(std::min<size_t>(history.size(), 2));
+  const size_t payloadBytes = sizeof(TREEPUB_PROGRESS_MAGIC) + sizeof(TREEPUB_PROGRESS_VERSION) +
+                              sizeof(currentNodeId) + sizeof(uint16_t) + sizeof(historyCount) +
+                              static_cast<size_t>(historyCount) * sizeof(uint32_t);
+  auto data = makeUniqueNoThrow<uint8_t[]>(payloadBytes);
+  if (!data) {
+    LOG_ERR("TRR", "OOM writing treepub progress");
+    return;
+  }
+  uint8_t* p = data.get();
   memcpy(p, &TREEPUB_PROGRESS_MAGIC, sizeof(TREEPUB_PROGRESS_MAGIC));
   p += sizeof(TREEPUB_PROGRESS_MAGIC);
   *p++ = TREEPUB_PROGRESS_VERSION;
   memcpy(p, &currentNodeId, sizeof(currentNodeId));
   p += sizeof(currentNodeId);
-  uint16_t page = static_cast<uint16_t>(std::max(0, currentPage));
+  const uint16_t page = static_cast<uint16_t>(std::max(0, currentPage));
   memcpy(p, &page, sizeof(page));
   p += sizeof(page);
-  uint16_t historyCount = static_cast<uint16_t>(std::min<size_t>(history.size(), 2));
   memcpy(p, &historyCount, sizeof(historyCount));
   p += sizeof(historyCount);
-  for (size_t i = history.size() > 2 ? history.size() - 2 : 0; i < history.size(); i++) {
+  for (size_t i = history.size() > historyCount ? history.size() - historyCount : 0; i < history.size(); i++) {
     memcpy(p, &history[i], sizeof(uint32_t));
     p += sizeof(uint32_t);
   }
-  ProgressFile::writeAtomic(treepub->getCachePath(), data, sizeof(data));
+  ProgressFile::writeAtomic(treepub->getCachePath(), data.get(), payloadBytes);
 }
 
 void TreepubReaderActivity::loadProgress() {
@@ -348,14 +359,32 @@ void TreepubReaderActivity::loadProgress() {
 
 void TreepubReaderActivity::saveBookmarks() const {
   if (!treepub) return;
-  const std::string path = treepub->getCachePath() + "/bookmarks.bin";
-  HalFile file;
-  if (!Storage.openFileForWrite("TRR", path, file)) return;
-  file.write(reinterpret_cast<const uint8_t*>(&TREEPUB_BOOKMARK_MAGIC), sizeof(TREEPUB_BOOKMARK_MAGIC));
-  file.write(&TREEPUB_BOOKMARK_VERSION, sizeof(TREEPUB_BOOKMARK_VERSION));
   const uint16_t count = static_cast<uint16_t>(bookmarks.size());
-  file.write(reinterpret_cast<const uint8_t*>(&count), sizeof(count));
-  if (count > 0) file.write(reinterpret_cast<const uint8_t*>(bookmarks.data()), sizeof(uint32_t) * count);
+  const size_t payloadBytes =
+      sizeof(TREEPUB_BOOKMARK_MAGIC) + sizeof(TREEPUB_BOOKMARK_VERSION) + sizeof(count) + sizeof(uint32_t) * count;
+  auto data = makeUniqueNoThrow<uint8_t[]>(payloadBytes);
+  if (!data) {
+    LOG_ERR("TRR", "OOM writing treepub bookmarks");
+    return;
+  }
+  uint8_t* p = data.get();
+  memcpy(p, &TREEPUB_BOOKMARK_MAGIC, sizeof(TREEPUB_BOOKMARK_MAGIC));
+  p += sizeof(TREEPUB_BOOKMARK_MAGIC);
+  *p++ = TREEPUB_BOOKMARK_VERSION;
+  memcpy(p, &count, sizeof(count));
+  p += sizeof(count);
+  if (count > 0) memcpy(p, bookmarks.data(), sizeof(uint32_t) * count);
+
+  const std::string finalPath = treepub->getCachePath() + "/bookmarks.bin";
+  const std::string tmpPath = treepub->getCachePath() + "/bookmarks.bin.tmp";
+  {
+    HalFile file;
+    if (!Storage.openFileForWrite("TRR", tmpPath, file)) return;
+    if (file.write(data.get(), payloadBytes) != payloadBytes) return;
+    file.flush();
+  }
+  Storage.remove(finalPath.c_str());
+  Storage.rename(tmpPath.c_str(), finalPath.c_str());
 }
 
 void TreepubReaderActivity::loadBookmarks() {

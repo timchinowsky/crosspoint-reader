@@ -93,8 +93,10 @@ bool Treepub::loadFromCache() {
     Node node;
     uint32_t childCount = 0;
     if (file.read(reinterpret_cast<uint8_t*>(&node.id), sizeof(node.id)) != sizeof(node.id)) return false;
-    if (file.read(reinterpret_cast<uint8_t*>(&node.parentId), sizeof(node.parentId)) != sizeof(node.parentId)) return false;
-    if (!readString(file, node.title) || !readString(file, node.text) || !readString(file, node.imagePath)) return false;
+    if (file.read(reinterpret_cast<uint8_t*>(&node.parentId), sizeof(node.parentId)) != sizeof(node.parentId))
+      return false;
+    if (!readString(file, node.title) || !readString(file, node.text) || !readString(file, node.imagePath))
+      return false;
     if (file.read(reinterpret_cast<uint8_t*>(&childCount), sizeof(childCount)) != sizeof(childCount)) return false;
     node.children.resize(childCount);
     if (childCount > 0) {
@@ -127,7 +129,8 @@ bool Treepub::saveToCache() const {
     if (!writeString(file, node.title) || !writeString(file, node.text) || !writeString(file, node.imagePath))
       return false;
     const uint32_t childCount = static_cast<uint32_t>(node.children.size());
-    if (file.write(reinterpret_cast<const uint8_t*>(&childCount), sizeof(childCount)) != sizeof(childCount)) return false;
+    if (file.write(reinterpret_cast<const uint8_t*>(&childCount), sizeof(childCount)) != sizeof(childCount))
+      return false;
     if (childCount > 0) {
       const size_t bytes = sizeof(uint32_t) * childCount;
       if (file.write(reinterpret_cast<const uint8_t*>(node.children.data()), bytes) != bytes) return false;
@@ -150,20 +153,9 @@ bool Treepub::parseSourceFile() {
     return false;
   }
 
-  auto buffer = makeUniqueNoThrow<char[]>(fileSize + 1);
-  if (!buffer) {
-    LOG_ERR("TRP", "OOM parsing treepub (%u bytes)", static_cast<unsigned>(fileSize));
-    return false;
-  }
-  if (file.read(reinterpret_cast<uint8_t*>(buffer.get()), fileSize) != static_cast<int>(fileSize)) {
-    LOG_ERR("TRP", "Failed to read treepub file");
-    return false;
-  }
-  buffer[fileSize] = '\0';
-
-  const size_t docCapacity = fileSize * 2 + 4096;
+  const size_t docCapacity = std::clamp<size_t>(fileSize + 8192, 24 * 1024, 96 * 1024);
   DynamicJsonDocument doc(docCapacity);
-  const auto err = deserializeJson(doc, buffer.get());
+  const auto err = deserializeJson(doc, file);
   if (err) {
     LOG_ERR("TRP", "Treepub JSON parse error: %s", err.c_str());
     return false;
@@ -191,6 +183,10 @@ bool Treepub::parseSourceFile() {
 
     Node node;
     node.id = obj["id"] | 0;
+    if (node.id == 0) {
+      LOG_ERR("TRP", "Treepub node has invalid id=0");
+      return false;
+    }
     node.parentId = obj["parent"] | 0;
     node.title = obj["title"] | "";
     node.text = obj["text"] | "";

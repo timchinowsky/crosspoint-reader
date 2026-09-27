@@ -15,13 +15,14 @@
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
+#include "TreepubBookmarkUtils.h"
 #include "TreepubNavigatorActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace {
 constexpr uint32_t TREEPUB_PROGRESS_MAGIC = 0x50525454;  // "TTRP"
-constexpr uint8_t TREEPUB_PROGRESS_VERSION = 1;
+constexpr uint8_t TREEPUB_PROGRESS_VERSION = 2;
 constexpr uint32_t TREEPUB_BOOKMARK_MAGIC = 0x4B525454;  // "TTRK"
 constexpr uint8_t TREEPUB_BOOKMARK_VERSION = 1;
 }  // namespace
@@ -290,10 +291,8 @@ bool TreepubReaderActivity::handleFormatInput() {
 
 void TreepubReaderActivity::saveProgress() const {
   if (!treepub) return;
-  const uint16_t historyCount = static_cast<uint16_t>(std::min<size_t>(history.size(), HISTORY_MAX));
-  const size_t payloadBytes = sizeof(TREEPUB_PROGRESS_MAGIC) + sizeof(TREEPUB_PROGRESS_VERSION) +
-                              sizeof(currentNodeId) + sizeof(uint16_t) + sizeof(historyCount) +
-                              static_cast<size_t>(historyCount) * sizeof(uint32_t);
+  const size_t payloadBytes =
+      sizeof(TREEPUB_PROGRESS_MAGIC) + sizeof(TREEPUB_PROGRESS_VERSION) + sizeof(currentNodeId) + sizeof(uint16_t);
   auto data = makeUniqueNoThrow<uint8_t[]>(payloadBytes);
   if (!data) {
     LOG_ERR("TRR", "OOM writing treepub progress");
@@ -307,13 +306,6 @@ void TreepubReaderActivity::saveProgress() const {
   p += sizeof(currentNodeId);
   const uint16_t page = static_cast<uint16_t>(std::max(0, currentPage));
   memcpy(p, &page, sizeof(page));
-  p += sizeof(page);
-  memcpy(p, &historyCount, sizeof(historyCount));
-  p += sizeof(historyCount);
-  for (size_t i = history.size() > historyCount ? history.size() - historyCount : 0; i < history.size(); i++) {
-    memcpy(p, &history[i], sizeof(uint32_t));
-    p += sizeof(uint32_t);
-  }
   ProgressFile::writeAtomic(treepub->getCachePath(), data.get(), payloadBytes);
 }
 
@@ -325,24 +317,15 @@ void TreepubReaderActivity::loadProgress() {
   uint8_t version = 0;
   uint32_t nodeId = 0;
   uint16_t page = 0;
-  uint16_t historyCount = 0;
   if (file.read(reinterpret_cast<uint8_t*>(&magic), sizeof(magic)) != sizeof(magic)) return;
   if (file.read(&version, sizeof(version)) != sizeof(version)) return;
   if (magic != TREEPUB_PROGRESS_MAGIC || version != TREEPUB_PROGRESS_VERSION) return;
   if (file.read(reinterpret_cast<uint8_t*>(&nodeId), sizeof(nodeId)) != sizeof(nodeId)) return;
   if (file.read(reinterpret_cast<uint8_t*>(&page), sizeof(page)) != sizeof(page)) return;
-  if (file.read(reinterpret_cast<uint8_t*>(&historyCount), sizeof(historyCount)) != sizeof(historyCount)) return;
   if (treepub->getNode(nodeId)) {
     currentNodeId = nodeId;
     currentPage = page;
   }
-  history.clear();
-  historyCount = std::min<uint16_t>(historyCount, static_cast<uint16_t>(HISTORY_MAX));
-  for (uint16_t i = 0; i < historyCount; i++) {
-    uint32_t h = 0;
-    if (file.read(reinterpret_cast<uint8_t*>(&h), sizeof(h)) != sizeof(h)) break;
-  }
-  // Resume restores only a stable location; do not carry historical back-stack across sessions.
   history.clear();
   refreshPositionCache();
   buildNodeLayout();
@@ -400,13 +383,7 @@ void TreepubReaderActivity::loadBookmarks() {
 }
 
 void TreepubReaderActivity::toggleBookmark() {
-  const auto it = std::find(bookmarks.begin(), bookmarks.end(), currentNodeId);
-  if (it == bookmarks.end()) {
-    if (bookmarks.size() >= BOOKMARK_MAX) bookmarks.erase(bookmarks.begin());
-    bookmarks.push_back(currentNodeId);
-  } else {
-    bookmarks.erase(it);
-  }
+  TreepubBookmarkUtils::toggleWithCap(bookmarks, currentNodeId, BOOKMARK_MAX);
   saveBookmarks();
 }
 

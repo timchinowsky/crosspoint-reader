@@ -225,7 +225,7 @@ bool Treepub::load() {
   setupCacheDir();
   if (!loadFromCache()) {
     if (!parseSourceFile()) return false;
-    saveToCache();
+    if (!saveToCache()) LOG_ERR("TRP", "Failed to persist treepub cache for %s", filepath.c_str());
   }
   loaded = true;
   return true;

@@ -17,12 +17,11 @@
 #include "ReaderUtils.h"
 #include "TreepubBookmarkUtils.h"
 #include "TreepubNavigatorActivity.h"
+#include "TreepubProgressCodec.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace {
-constexpr uint32_t TREEPUB_PROGRESS_MAGIC = 0x50525454;  // "TTRP"
-constexpr uint8_t TREEPUB_PROGRESS_VERSION = 2;
 constexpr uint32_t TREEPUB_BOOKMARK_MAGIC = 0x4B525454;  // "TTRK"
 constexpr uint8_t TREEPUB_BOOKMARK_VERSION = 1;
 }  // namespace
@@ -291,40 +290,40 @@ bool TreepubReaderActivity::handleFormatInput() {
 
 void TreepubReaderActivity::saveProgress() const {
   if (!treepub) return;
-  const size_t payloadBytes =
-      sizeof(TREEPUB_PROGRESS_MAGIC) + sizeof(TREEPUB_PROGRESS_VERSION) + sizeof(currentNodeId) + sizeof(uint16_t);
+  const size_t payloadBytes = TreepubProgressCodec::ENCODED_SIZE;
   auto data = makeUniqueNoThrow<uint8_t[]>(payloadBytes);
   if (!data) {
     LOG_ERR("TRR", "OOM writing treepub progress");
     return;
   }
-  uint8_t* p = data.get();
-  memcpy(p, &TREEPUB_PROGRESS_MAGIC, sizeof(TREEPUB_PROGRESS_MAGIC));
-  p += sizeof(TREEPUB_PROGRESS_MAGIC);
-  *p++ = TREEPUB_PROGRESS_VERSION;
-  memcpy(p, &currentNodeId, sizeof(currentNodeId));
-  p += sizeof(currentNodeId);
-  const uint16_t page = static_cast<uint16_t>(std::max(0, currentPage));
-  memcpy(p, &page, sizeof(page));
+  TreepubProgressCodec::ProgressRecord record{
+      .nodeId = currentNodeId,
+      .page = static_cast<uint32_t>(std::max(0, currentPage)),
+  };
+  if (!TreepubProgressCodec::encode(data.get(), payloadBytes, record)) {
+    LOG_ERR("TRR", "Failed to encode treepub progress");
+    return;
+  }
   ProgressFile::writeAtomic(treepub->getCachePath(), data.get(), payloadBytes);
 }
 
 void TreepubReaderActivity::loadProgress() {
   if (!treepub) return;
   HalFile file;
-  if (!Storage.openFileForRead("TRR", treepub->getCachePath() + "/progress.bin", file)) return;
-  uint32_t magic = 0;
-  uint8_t version = 0;
-  uint32_t nodeId = 0;
-  uint16_t page = 0;
-  if (file.read(reinterpret_cast<uint8_t*>(&magic), sizeof(magic)) != sizeof(magic)) return;
-  if (file.read(&version, sizeof(version)) != sizeof(version)) return;
-  if (magic != TREEPUB_PROGRESS_MAGIC || version != TREEPUB_PROGRESS_VERSION) return;
-  if (file.read(reinterpret_cast<uint8_t*>(&nodeId), sizeof(nodeId)) != sizeof(nodeId)) return;
-  if (file.read(reinterpret_cast<uint8_t*>(&page), sizeof(page)) != sizeof(page)) return;
-  if (treepub->getNode(nodeId)) {
-    currentNodeId = nodeId;
-    currentPage = page;
+  const std::string path = treepub->getCachePath() + "/progress.bin";
+  if (!Storage.openFileForRead("TRR", path.c_str(), file)) return;
+  auto data = makeUniqueNoThrow<uint8_t[]>(TreepubProgressCodec::ENCODED_SIZE);
+  if (!data) {
+    LOG_ERR("TRR", "OOM reading treepub progress");
+    return;
+  }
+  if (file.read(data.get(), TreepubProgressCodec::ENCODED_SIZE) != static_cast<int>(TreepubProgressCodec::ENCODED_SIZE))
+    return;
+  TreepubProgressCodec::ProgressRecord record;
+  if (!TreepubProgressCodec::decode(data.get(), TreepubProgressCodec::ENCODED_SIZE, &record)) return;
+  if (treepub->getNode(record.nodeId)) {
+    currentNodeId = record.nodeId;
+    currentPage = static_cast<int>(record.page);
   }
   history.clear();
   refreshPositionCache();
@@ -355,10 +354,16 @@ void TreepubReaderActivity::saveBookmarks() const {
     HalFile file;
     if (!Storage.openFileForWrite("TRR", tmpPath, file)) return;
     if (file.write(data.get(), payloadBytes) != payloadBytes) return;
-    file.flush();
+    if (!file.flush()) {
+      LOG_ERR("TRR", "Failed to flush treepub bookmarks tmp");
+      return;
+    }
   }
-  Storage.remove(finalPath.c_str());
-  Storage.rename(tmpPath.c_str(), finalPath.c_str());
+  if (Storage.exists(finalPath.c_str()) && !Storage.remove(finalPath.c_str())) {
+    LOG_ERR("TRR", "Failed to remove treepub bookmarks");
+    return;
+  }
+  if (!Storage.rename(tmpPath.c_str(), finalPath.c_str())) LOG_ERR("TRR", "Failed to commit treepub bookmarks");
 }
 
 void TreepubReaderActivity::loadBookmarks() {

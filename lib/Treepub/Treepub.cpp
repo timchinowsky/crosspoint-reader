@@ -11,7 +11,7 @@ namespace {
 constexpr uint32_t TREEPUB_CACHE_MAGIC = 0x42505254;  // "TRPB"
 constexpr uint8_t TREEPUB_CACHE_VERSION = 1;
 constexpr char TREEPUB_CACHE_FILE[] = "/treepub.bin";
-constexpr size_t MAX_TREEPUB_FILE_SIZE = 512 * 1024;
+constexpr size_t MAX_TREEPUB_FILE_SIZE = 88 * 1024;  // Keep source-size contract aligned with JSON doc capacity.
 constexpr size_t TREEPUB_JSON_DOC_MAX = 48 * 1024;  // Cap parser heap for ESP32-C3 while accepting medium treepub docs.
 }  // namespace
 
@@ -213,7 +213,12 @@ bool Treepub::parseSourceFile() {
       auto it = idToIndex.find(childId);
       if (it == idToIndex.end()) continue;
       Node& child = nodes[it->second];
-      if (child.parentId == 0) child.parentId = node.id;
+      if (child.parentId == 0) {
+        child.parentId = node.id;
+      } else if (child.parentId != node.id) {
+        LOG_ERR("TRP", "Conflicting parent for child %u", static_cast<unsigned>(childId));
+        return false;
+      }
     }
   }
 

@@ -36,6 +36,13 @@ enum class HomeMenuItem { NONE, FILE_BROWSER, LIBRARY, OPDS_BROWSER, FILE_TRANSF
 class ActivityManager {
   friend class RenderLock;
 
+  struct TreeReadingSession {
+    static constexpr size_t PATH_BUFFER_SIZE = 384;
+    bool active = false;
+    char basePath[PATH_BUFFER_SIZE]{};
+    char currentPath[PATH_BUFFER_SIZE]{};
+  };
+
  protected:
   GfxRenderer& renderer;
   MappedInputManager& mappedInput;
@@ -65,6 +72,7 @@ class ActivityManager {
   // Whether to trigger a render after the current loop()
   // This variable must only be set by the main loop, to avoid race conditions
   std::atomic<bool> requestedUpdate{false};
+  TreeReadingSession treeReadingSession;
 
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -87,7 +95,7 @@ class ActivityManager {
   void goToFileBrowser(std::string path = {});
   void goToLibrary();
   void goToBrowser();
-  void goToReader(std::string path, bool allowFastInitialRefresh = false);
+  void goToReader(std::string path, bool allowFastInitialRefresh = false, bool fromTreeSession = false);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
@@ -115,6 +123,10 @@ class ActivityManager {
   // Trigger a render and block until it completes.
   // Must NOT be called from the render task or while holding a RenderLock.
   void requestUpdateAndWait();
+
+  void setTreeReadingSession(std::string basePath, std::string currentPath);
+  void clearTreeReadingSession();
+  bool openNextTreeDocument(const std::string& currentPath);
 };
 
 extern ActivityManager activityManager;  // singleton, to be defined in main.cpp

@@ -143,6 +143,9 @@ bool ReaderActivity::handleEndOfBookPageTurn(const bool prevTriggered, const boo
     return true;
   }
   if (nextTriggered) {
+    if (activityManager.openNextTreeDocument(bookPath)) {
+      return true;
+    }
     onGoHome();
   } else if (prevTriggered) {
     onReturnFromEndOfBook();

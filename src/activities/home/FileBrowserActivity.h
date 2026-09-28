@@ -48,8 +48,13 @@ class FileBrowserActivity final : public UiListActivity {
   static constexpr int PREWARM_WINDOW = 24;
   int prewarmedStart = -1;
   void prewarmRowGlyphs(int start);
+  bool hasParentRow() const;
+  bool isParentRow(int rowIndex) const;
+  int fileIndexForRow(int rowIndex) const;
+  bool navigateToParentFolder();
+  void buildBreadcrumb(char* out, size_t outSize, int maxWidth) const;
 
-  int listCount() const override { return static_cast<int>(files.size()); }
+  int listCount() const override { return static_cast<int>(files.size()) + (hasParentRow() ? 1 : 0); }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
   void onRowLongPress(int index) override;

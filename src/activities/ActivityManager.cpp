@@ -5,10 +5,15 @@
 #include <FsHelpers.h>
 #include <HalDisplay.h>
 #include <HalPowerManager.h>
+#include <HalStorage.h>
 #include <Memory.h>
 #include <VectorFontSupport.h>
 
 #include <algorithm>
+#include <cstring>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
@@ -30,6 +35,74 @@
 #include "util/FullScreenMessageActivity.h"
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
+
+namespace {
+constexpr size_t FILE_NAME_BUFFER_SIZE = 500;
+constexpr size_t MAX_TREE_TRAVERSAL_DEPTH = 32;
+
+bool isReadableFileInTree(std::string_view name) {
+  return FsHelpers::hasEpubExtension(name) || FsHelpers::hasXtcExtension(name) || FsHelpers::hasTxtExtension(name) ||
+         FsHelpers::hasMarkdownExtension(name) || FsHelpers::hasBmpExtension(name) || FsHelpers::hasPngExtension(name);
+}
+
+std::string joinPath(const std::string& base, const std::string& entryName) {
+  return base == "/" ? "/" + entryName : base + "/" + entryName;
+}
+
+bool isPathInsideBase(const std::string& basePath, const std::string& path) {
+  if (basePath == "/") return !path.empty() && path[0] == '/';
+  if (path.size() <= basePath.size() || path.compare(0, basePath.size(), basePath) != 0) return false;
+  return path[basePath.size()] == '/';
+}
+
+bool isPathInsideBase(const char* basePath, const char* path) {
+  return isPathInsideBase(std::string(basePath), std::string(path));
+}
+
+bool loadTreeEntries(const std::string& path, std::vector<std::string>& entries) {
+  entries.clear();
+  auto dir = Storage.open(path.c_str());
+  if (!dir || !dir.isDirectory()) {
+    LOG_ERR("ACT", "Cannot open tree folder: %s", path.c_str());
+    return false;
+  }
+
+  auto nameBuffer = makeUniqueNoThrow<char[]>(FILE_NAME_BUFFER_SIZE);
+  if (!nameBuffer) {
+    LOG_ERR("ACT", "OOM: %d bytes", static_cast<int>(FILE_NAME_BUFFER_SIZE));
+    return false;
+  }
+
+  auto includeEntry = [&](const char* name, bool isDirectory) {
+    if ((!SETTINGS.showHiddenFiles && name[0] == '.') || strcmp(name, "System Volume Information") == 0) {
+      return false;
+    }
+    return isDirectory || isReadableFileInTree(name);
+  };
+
+  dir.rewindDirectory();
+  size_t entryCount = 0;
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    file.getName(nameBuffer.get(), FILE_NAME_BUFFER_SIZE);
+    if (includeEntry(nameBuffer.get(), file.isDirectory())) ++entryCount;
+  }
+
+  entries.reserve(entryCount);
+  dir.rewindDirectory();
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    file.getName(nameBuffer.get(), FILE_NAME_BUFFER_SIZE);
+    const bool isDirectory = file.isDirectory();
+    if (!includeEntry(nameBuffer.get(), isDirectory)) continue;
+    if (isDirectory) {
+      entries.emplace_back(std::string(nameBuffer.get()) + "/");
+      continue;
+    }
+    entries.emplace_back(nameBuffer.get());
+  }
+  FsHelpers::sortFileList(entries);
+  return true;
+}
+}  // namespace
 
 void ActivityManager::begin() {
 #if defined(configNUM_CORES) && configNUM_CORES > 1
@@ -287,10 +360,21 @@ void ActivityManager::goToBrowser() {
   }
 }
 
-void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
+void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh, const bool fromTreeSession) {
   if (path.empty()) {
+    clearTreeReadingSession();
     goToFileBrowser("/");
     return;
+  }
+  if (!fromTreeSession) {
+    clearTreeReadingSession();
+  } else {
+    const std::string normalizedPath = FsHelpers::normalisePath(path);
+    taskENTER_CRITICAL(&activityManagerSpinlock);
+    if (treeReadingSession.active) {
+      snprintf(treeReadingSession.currentPath, sizeof(treeReadingSession.currentPath), "%s", normalizedPath.c_str());
+    }
+    taskEXIT_CRITICAL(&activityManagerSpinlock);
   }
 
   if (FsHelpers::hasBmpExtension(path) || FsHelpers::hasPngExtension(path)) {
@@ -307,6 +391,130 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
   if (activity) {
     replaceActivity(std::move(activity));
   }
+}
+
+void ActivityManager::setTreeReadingSession(std::string basePath, std::string currentPath) {
+  const std::string safeBase = FsHelpers::normalisePath(basePath.empty() ? "/" : basePath);
+  const std::string safeCurrent = FsHelpers::normalisePath(currentPath);
+  taskENTER_CRITICAL(&activityManagerSpinlock);
+  const int baseLen =
+      snprintf(treeReadingSession.basePath, sizeof(treeReadingSession.basePath), "%s", safeBase.c_str());
+  const int currentLen =
+      snprintf(treeReadingSession.currentPath, sizeof(treeReadingSession.currentPath), "%s", safeCurrent.c_str());
+  treeReadingSession.active = baseLen > 0 && currentLen > 0 &&
+                              baseLen < static_cast<int>(sizeof(treeReadingSession.basePath)) &&
+                              currentLen < static_cast<int>(sizeof(treeReadingSession.currentPath));
+  taskEXIT_CRITICAL(&activityManagerSpinlock);
+}
+
+void ActivityManager::clearTreeReadingSession() {
+  taskENTER_CRITICAL(&activityManagerSpinlock);
+  treeReadingSession.active = false;
+  treeReadingSession.basePath[0] = '\0';
+  treeReadingSession.currentPath[0] = '\0';
+  taskEXIT_CRITICAL(&activityManagerSpinlock);
+}
+
+bool ActivityManager::openNextTreeDocument(const std::string& currentPath) {
+  const std::string normalizedCurrentPath = FsHelpers::normalisePath(currentPath);
+  char basePath[TreeReadingSession::PATH_BUFFER_SIZE]{};
+  char sessionCurrentPath[TreeReadingSession::PATH_BUFFER_SIZE]{};
+  taskENTER_CRITICAL(&activityManagerSpinlock);
+  const bool active = treeReadingSession.active;
+  if (active) {
+    snprintf(basePath, sizeof(basePath), "%s", treeReadingSession.basePath);
+    snprintf(sessionCurrentPath, sizeof(sessionCurrentPath), "%s", treeReadingSession.currentPath);
+  }
+  taskEXIT_CRITICAL(&activityManagerSpinlock);
+
+  if (!active || basePath[0] == '\0') return false;
+  if (normalizedCurrentPath != sessionCurrentPath) {
+    clearTreeReadingSession();
+    return false;
+  }
+  if (!isPathInsideBase(basePath, normalizedCurrentPath.c_str()) &&
+      !(strcmp(basePath, "/") == 0 && !normalizedCurrentPath.empty() && normalizedCurrentPath[0] == '/')) {
+    clearTreeReadingSession();
+    return false;
+  }
+
+  struct DirState {
+    std::string path;
+    std::vector<std::string> entries;
+    size_t nextEntry = 0;
+  };
+
+  std::vector<DirState> stack;
+  stack.reserve(MAX_TREE_TRAVERSAL_DEPTH);
+  DirState root{basePath, {}, 0};
+  if (!loadTreeEntries(root.path, root.entries)) {
+    return false;
+  }
+  stack.push_back(std::move(root));
+
+  const std::string basePathStr{basePath};
+  const std::string relative =
+      basePathStr == "/" ? normalizedCurrentPath.substr(1) : normalizedCurrentPath.substr(basePathStr.size() + 1);
+  if (relative.empty()) return false;
+  const size_t slash = relative.find_last_of('/');
+  const std::string targetFile = slash == std::string::npos ? relative : relative.substr(slash + 1);
+  const std::string parentRelative = slash == std::string::npos ? "" : relative.substr(0, slash);
+
+  size_t start = 0;
+  while (start < parentRelative.size()) {
+    if (stack.size() >= MAX_TREE_TRAVERSAL_DEPTH) {
+      LOG_ERR("ACT", "Tree traversal depth limit reached at %s", basePath);
+      clearTreeReadingSession();
+      return false;
+    }
+    const size_t nextSlash = parentRelative.find('/', start);
+    const std::string dirName =
+        nextSlash == std::string::npos ? parentRelative.substr(start) : parentRelative.substr(start, nextSlash - start);
+    const std::string dirEntry = dirName + "/";
+    auto& parent = stack.back();
+    const auto it = std::find(parent.entries.begin(), parent.entries.end(), dirEntry);
+    if (it == parent.entries.end()) return false;
+    parent.nextEntry = static_cast<size_t>(it - parent.entries.begin()) + 1;
+
+    DirState child{joinPath(parent.path, dirName), {}, 0};
+    if (!loadTreeEntries(child.path, child.entries)) return false;
+    stack.push_back(std::move(child));
+    if (nextSlash == std::string::npos) break;
+    start = nextSlash + 1;
+  }
+
+  auto& leaf = stack.back();
+  const auto currentIt = std::find(leaf.entries.begin(), leaf.entries.end(), targetFile);
+  if (currentIt == leaf.entries.end()) return false;
+  leaf.nextEntry = static_cast<size_t>(currentIt - leaf.entries.begin()) + 1;
+
+  while (!stack.empty()) {
+    auto& state = stack.back();
+    if (state.nextEntry >= state.entries.size()) {
+      stack.pop_back();
+      continue;
+    }
+
+    const std::string entry = state.entries[state.nextEntry++];
+    if (entry.empty()) continue;
+    if (entry.back() == '/') {
+      if (stack.size() >= MAX_TREE_TRAVERSAL_DEPTH) {
+        LOG_ERR("ACT", "Tree traversal depth limit reached while scanning %s", state.path.c_str());
+        clearTreeReadingSession();
+        return false;
+      }
+      DirState child{joinPath(state.path, entry.substr(0, entry.size() - 1)), {}, 0};
+      if (loadTreeEntries(child.path, child.entries)) {
+        stack.push_back(std::move(child));
+      }
+      continue;
+    }
+
+    goToReader(joinPath(state.path, entry), false, true);
+    return true;
+  }
+
+  return false;
 }
 
 void ActivityManager::goToSleep(bool fromTimeout) {

@@ -239,6 +239,17 @@ families:
       italic:     {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexmono/IBMPlexMono-Italic.ttf"}
       bolditalic: {url: "https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexmono/IBMPlexMono-BoldItalic.ttf"}
 
+  - name: UbuntuMono
+    description: "Canonical monospace for code and technical reading (Latin, Greek, Cyrillic)"
+    scripts: [latin, cyrillic, greek]
+    intervals: latin-ext,greek,cyrillic,ipa-chars
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://raw.githubusercontent.com/canonical/Ubuntu-Sans-Mono-fonts/main/fonts/ttf/UbuntuSansMono-Regular.ttf"}
+      bold:       {url: "https://raw.githubusercontent.com/canonical/Ubuntu-Sans-Mono-fonts/main/fonts/ttf/UbuntuSansMono-Bold.ttf"}
+      italic:     {url: "https://raw.githubusercontent.com/canonical/Ubuntu-Sans-Mono-fonts/main/fonts/ttf/UbuntuSansMono-Italic.ttf"}
+      bolditalic: {url: "https://raw.githubusercontent.com/canonical/Ubuntu-Sans-Mono-fonts/main/fonts/ttf/UbuntuSansMono-BoldItalic.ttf"}
+
   - name: SourceCodePro
     description: "Adobe monospace with excellent hinting (Latin)"
     scripts: [latin]
